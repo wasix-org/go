@@ -2,14 +2,9 @@
 // Use of this source code is governed by a BSD-style
 // license that can be found in the LICENSE file.
 
-//go:build !unix && !windows && !wasip1
+//go:build wasip1
 
 package filelock
-
-import (
-	"errors"
-	"io/fs"
-)
 
 type lockType int8
 
@@ -19,17 +14,19 @@ const (
 )
 
 func lock(f File, lt lockType) error {
-	return &fs.PathError{
-		Op:   lt.String(),
-		Path: f.Name(),
-		Err:  errors.ErrUnsupported,
-	}
+	return nil
+	// return &fs.PathError{
+	// 	Op:   lt.String(),
+	// 	Path: f.Name(),
+	// 	Err:  errors.ErrUnsupported,
+	// }
 }
 
 func unlock(f File) error {
-	return &fs.PathError{
-		Op:   "Unlock",
-		Path: f.Name(),
-		Err:  errors.ErrUnsupported,
-	}
+	return nil
+	// return &fs.PathError{
+	// 	Op:   "Unlock",
+	// 	Path: f.Name(),
+	// 	Err:  errors.ErrUnsupported,
+	// }
 }

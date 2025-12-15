@@ -10,7 +10,6 @@ package syscall
 
 import (
 	"internal/bytealg"
-	"internal/itoa"
 	"sync"
 	"unsafe"
 )
@@ -168,24 +167,31 @@ func ForkExec(argv0 string, argv []string, attr *ProcAttr) (pid int, err error) 
 		return 0, err
 	}
 
-	var path = "/bin"
+	path := "/bin"
 	pathp, err := BytePtrFromString(path)
 	if err != nil {
 		return 0, err
 	}
-	ret := make([]int32, 1)
-	// var retPid int32
 
-	Write(1, []byte("proc_spawn2\n"))
-	Write(1, []byte(argv0))
-	Write(1, []byte(argvJoined))
-	Write(1, []byte(envvJoined))
-	Write(1, []byte(path))
-	Write(1, []byte("Files num "+itoa.Itoa(len(attr.Files))))
-	// fmt.Println("proc_spawn2", argv0p, argvp, envvp, pathp, ret, argvJoined, envvJoined, path)
+	// Build WASIX spawn file actions
+	fdops, keepAlive := buildSpawnFdOps(attr)
+	_ = keepAlive // keep referenced until after proc_spawn2 returns
+
+	var fdopsPtr uintptr
+	if len(fdops) != 0 {
+		fdopsPtr = uintptr(unsafe.Pointer(&fdops[0]))
+	}
+
+	ret := make([]int32, 1)
+
+	// Write(1, []byte("proc_spawn2\n"))
+	// Write(1, []byte("argv0: "+argv0))
+	// Write(1, []byte("argvJoined: "+argvJoined))
+	// Write(1, []byte(envvJoined))
+	// Write(1, []byte(path))
+	// Write(1, []byte("Files num "+itoa.Itoa(len(attr.Files))))
 
 	runtime_BeforeExec()
-
 	err = proc_spawn2(
 		uintptr(unsafe.Pointer(argv0p)),
 		int32(len(argv0)),
@@ -193,20 +199,112 @@ func ForkExec(argv0 string, argv []string, attr *ProcAttr) (pid int, err error) 
 		int32(len(argvJoined)),
 		uintptr(unsafe.Pointer(envvp)),
 		int32(len(envvJoined)),
-		0, // <- IMPLEMENT THIS
-		0, // <- IMPLEMENT THIS
+
+		// IMPLEMENT THIS:
+		fdopsPtr,
+		int32(len(fdops)),
+
 		0,
 		0,
 		true,
+
 		uintptr(unsafe.Pointer(pathp)),
 		int32(len(path)),
 		&ret[0],
 	)
 	runtime_AfterExec()
+
 	if err == Errno(0) {
 		return int(ret[0]), nil
 	}
 	return 0, err
+
+}
+
+type wasiProcSpawnFdOpName uint8
+
+const (
+	wasiProcSpawnFdOpClose  wasiProcSpawnFdOpName = 0 // __WASI_PROC_SPAWN_FD_OP_NAME_CLOSE
+	wasiProcSpawnFdOpDup2   wasiProcSpawnFdOpName = 1 // __WASI_PROC_SPAWN_FD_OP_NAME_DUP2
+	wasiProcSpawnFdOpOpen   wasiProcSpawnFdOpName = 2 // __WASI_PROC_SPAWN_FD_OP_NAME_OPEN
+	wasiProcSpawnFdOpChdir  wasiProcSpawnFdOpName = 3 // __WASI_PROC_SPAWN_FD_OP_NAME_CHDIR
+	wasiProcSpawnFdOpFchdir wasiProcSpawnFdOpName = 4 // __WASI_PROC_SPAWN_FD_OP_NAME_FCHDIR
+)
+
+type wasiLookupFlags uint32
+
+const wasiLookupSymlinkFollow wasiLookupFlags = 1 << 0 // __WASI_LOOKUPFLAGS_SYMLINK_FOLLOW
+
+type wasiOFlags uint16
+type wasiFdFlags uint16
+type wasiFdFlagsExt uint8
+
+type wasiRights uint64
+type wasiFd uint32
+
+// This struct must match your __wasi_proc_spawn_fd_op_t ABI.
+// If your actual ABI differs, adjust field sizes/order accordingly.
+type wasiProcSpawnFdOp struct {
+	Cmd wasiProcSpawnFdOpName
+	_   [3]byte // padding so the next uint32 is aligned
+
+	Fd    wasiFd
+	SrcFd wasiFd
+
+	PathLen uint32
+	Path    uintptr // pointer in wasm32 linear memory
+
+	OFlags    wasiOFlags
+	FdFlags   wasiFdFlags
+	FdFlagsEx wasiFdFlagsExt
+	_2        byte // padding
+	DirFlags  wasiLookupFlags
+
+	FSRightsBase       wasiRights
+	FSRightsInheriting wasiRights
+}
+
+const invalidFD = ^uintptr(0)
+
+func buildSpawnFdOps(attr *ProcAttr) (ops []wasiProcSpawnFdOp, keepAlive [][]byte) {
+	// stdio: dup2(attr.Files[i] -> i) for i=0..2 when provided
+	for target := 0; target < 3; target++ {
+		if len(attr.Files) <= target {
+			continue
+		}
+		src := attr.Files[target]
+		if src == invalidFD {
+			continue
+		}
+		ops = append(ops, wasiProcSpawnFdOp{
+			Cmd:   wasiProcSpawnFdOpDup2,
+			Fd:    wasiFd(target),
+			SrcFd: wasiFd(src),
+
+			// no path for dup2
+			PathLen: 0,
+			Path:    0,
+		})
+	}
+
+	// Optional chdir via file_actions (matches your C FDOP_CHDIR path behavior)
+	// if attr.Dir != "" {
+	// 	b := []byte(attr.Dir) // not NUL-terminated; length is explicit
+	// 	keepAlive = append(keepAlive, b)
+
+	// 	var p uintptr
+	// 	if len(b) != 0 {
+	// 		p = uintptr(unsafe.Pointer(&b[0]))
+	// 	}
+
+	// 	ops = append(ops, wasiProcSpawnFdOp{
+	// 		Cmd:     wasiProcSpawnFdOpChdir,
+	// 		PathLen: uint32(len(b)),
+	// 		Path:    p,
+	// 	})
+	// }
+
+	return ops, keepAlive
 }
 
 // Exec invokes the execve(2) system call.
