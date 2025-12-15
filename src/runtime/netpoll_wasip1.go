@@ -58,6 +58,7 @@ func netpollinit() {
 	clock := timeout.u.subscriptionClock()
 	clock.id = clockMonotonic
 	clock.precision = 1e3
+	clock.timeout = 1
 }
 
 func netpollIsPollDescriptor(fd uintptr) bool {
@@ -194,6 +195,9 @@ func netpoll(delay int64) (gList, int32) {
 	if delay >= 0 {
 		timeout := &subs[0]
 		clock := timeout.u.subscriptionClock()
+		if delay == 0 {
+			delay = 1
+		}
 		clock.timeout = uint64(delay)
 	} else {
 		pollsubs = subs[1:]
