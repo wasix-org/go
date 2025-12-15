@@ -331,18 +331,22 @@ type SysProcAttr struct {
 }
 
 func Syscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno) {
+	Write(1, []byte("\nRaw Syscall\n"))
 	return 0, 0, ENOSYS
 }
 
 func Syscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno) {
+	Write(1, []byte("\nRaw Syscall6\n"))
 	return 0, 0, ENOSYS
 }
 
 func RawSyscall(trap, a1, a2, a3 uintptr) (r1, r2 uintptr, err Errno) {
+	Write(1, []byte("\nRaw Syscall\n"))
 	return 0, 0, ENOSYS
 }
 
 func RawSyscall6(trap, a1, a2, a3, a4, a5, a6 uintptr) (r1, r2 uintptr, err Errno) {
+	Write(1, []byte("\nRaw Syscall6\n"))
 	return 0, 0, ENOSYS
 }
 
@@ -403,18 +407,140 @@ func Kill(pid int, signum Signal) error {
 }
 
 func Sendfile(outfd int, infd int, offset *int64, count int) (written int, err error) {
+	Write(1, []byte("Raw Sendfile\n"))
 	return 0, ENOSYS
 }
 
-func StartProcess(argv0 string, argv []string, attr *ProcAttr) (pid int, handle uintptr, err error) {
-	return 0, 0, ENOSYS
+// // IMPLEMENT ME
+// func StartProcess(argv0 string, argv []string, attr *ProcAttr) (pid int, handle uintptr, err error) {
+// 	Write(1, []byte("StartProcess\n"+argv0+"\n"))
+// 	return 0, 0, ENOSYS
+// }
+
+type wasiJoinFlags uint32
+
+const (
+	wasiJoinFlagsNonBlocking wasiJoinFlags = 1 << 0
+	wasiJoinFlagsWakeStopped wasiJoinFlags = 1 << 1
+)
+
+type wasiJoinStatusType uint8
+
+const (
+	wasiJoinStatusNothing    wasiJoinStatusType = 0
+	wasiJoinStatusExitNormal wasiJoinStatusType = 1
+	wasiJoinStatusExitSignal wasiJoinStatusType = 2
+	wasiJoinStatusStopped    wasiJoinStatusType = 3
+)
+
+type wasiErrno uint16
+type wasiSignal uint16
+
+type wasiErrnoSignal struct {
+	ExitCode wasiErrno
+	Signal   wasiSignal
 }
+
+// union __wasi_join_status_u_t
+type wasiJoinStatusUnion struct {
+	_ [4]byte
+}
+
+// struct __wasi_join_status_t
+type wasiJoinStatus struct {
+	Tag wasiJoinStatusType
+	_   byte // padding to align union
+	U   wasiJoinStatusUnion
+}
+
+// option<pid>
+type wasiOptionPidTag uint8
+
+const (
+	wasiOptionNone wasiOptionPidTag = 0
+	wasiOptionSome wasiOptionPidTag = 1
+)
+
+type wasiOptionPid struct {
+	Tag wasiOptionPidTag
+	_   byte
+	Pid int32
+}
+
+const WNOHANG = 1
+const WUNTRACED = 2
+
+func W_EXITCODE(ret, sig int) int {
+	return (ret << 8) | (sig & 0xff)
+}
+
+func W_STOPCODE(sig int) int {
+	return (sig << 8) | 0x7f
+}
+
+//go:wasmimport wasix_32v1 proc_join
+//go:noescape
+func proc_join(pid unsafe.Pointer, flags int32, status unsafe.Pointer) Errno
 
 func Wait4(pid int, wstatus *WaitStatus, options int, rusage *Rusage) (wpid int, err error) {
-	return 0, ENOSYS
+	var flags wasiJoinFlags
+
+	if options&WNOHANG != 0 {
+		flags |= wasiJoinFlagsNonBlocking
+	}
+	if options&WUNTRACED != 0 {
+		flags |= wasiJoinFlagsWakeStopped
+	}
+
+	var opid wasiOptionPid
+	if pid == -1 {
+		opid.Tag = wasiOptionNone
+	} else {
+		opid.Tag = wasiOptionSome
+		if pid < 0 {
+			pid = -pid
+		}
+		opid.Pid = int32(pid)
+	}
+
+	var status wasiJoinStatus
+	ret := proc_join(unsafe.Pointer(&opid), int32(flags), unsafe.Pointer(&status))
+	if ret != Errno(0) {
+		return -1, ret
+	}
+
+	// Read PID
+	if opid.Tag != wasiOptionSome {
+		return -1, ECHILD
+	}
+	wpid = int(opid.Pid)
+
+	// Decode status
+	switch status.Tag {
+	case wasiJoinStatusNothing:
+		*wstatus = 0
+
+	case wasiJoinStatusExitNormal:
+		code := *(*wasiErrno)(unsafe.Pointer(&status.U))
+		*wstatus = WaitStatus(W_EXITCODE(int(code), 0))
+
+	case wasiJoinStatusExitSignal:
+		es := *(*wasiErrnoSignal)(unsafe.Pointer(&status.U))
+		*wstatus = WaitStatus(W_EXITCODE(int(es.ExitCode), int(es.Signal)))
+
+	case wasiJoinStatusStopped:
+		sig := *(*wasiSignal)(unsafe.Pointer(&status.U))
+		*wstatus = WaitStatus(W_STOPCODE(int(sig)))
+
+	default:
+		return -1, ENOSYS
+	}
+
+	return wpid, nil
 }
 
 func Umask(mask int) int {
+	Write(1, []byte("Raw Umask\n"))
 	return 0
 }
 
