@@ -352,6 +352,38 @@ var preopens []opendir
 // from the current directory to its parent.
 var cwd string
 
+// stripPrefixes normalizes an absolute path by removing leading "/" and "./".
+// It also translates "." to the empty string.
+// This assumes the process starts with a working directory of "/".
+func stripPrefixes(path string) string {
+	for {
+		if len(path) > 0 && path[0] == '/' {
+			path = path[1:]
+		} else if len(path) >= 2 && path[0] == '.' && path[1] == '/' {
+			path = path[2:]
+		} else if path == "." {
+			path = ""
+		} else {
+			break
+		}
+	}
+	return path
+}
+
+// removes the \0 at the end from C-like string
+func removeNullByte(s string) string {
+	return stringslite.TrimSuffix(s, string(0))
+}
+
+func registerPreopenedFd(fd int32, prefix string) {
+	// prefix = stripPrefixes(prefix)
+	prefix = removeNullByte(prefix)
+	preopens = append(preopens, opendir{
+		fd:   fd,
+		name: prefix,
+	})
+}
+
 func init() {
 	dirNameBuf := make([]byte, 256)
 	// We start looking for preopens at fd=3 because 0, 1, and 2 are reserved
@@ -360,6 +392,8 @@ func init() {
 		var prestat prestat
 
 		errno := fd_prestat_get(preopenFd, &prestat)
+		// print into stdout using the systemcall Write
+		// Write(1, []byte("preopen (fd: "+itoa.Itoa(int(preopenFd))+") errno: "+errno.Error()+"\n"))
 		if errno == EBADF {
 			break
 		}
@@ -378,16 +412,7 @@ func init() {
 			panic("fd_prestat_dir_name: " + errno.Error())
 		}
 
-		preopens = append(preopens, opendir{
-			fd:   preopenFd,
-			name: string(dirNameBuf[:prestat.dir.prNameLen]),
-		})
-	}
-
-	if cwd, _ = Getenv("PWD"); cwd != "" {
-		cwd = joinPath("/", cwd)
-	} else if len(preopens) > 0 {
-		cwd = preopens[0].name
+		registerPreopenedFd(preopenFd, string(dirNameBuf[:prestat.dir.prNameLen]))
 	}
 }
 
@@ -487,6 +512,31 @@ func isDir(path string) bool {
 	return stringslite.HasSuffix(path, "/")
 }
 
+func boolToString(b bool) string {
+	if b {
+		return "true"
+	}
+	return "false"
+}
+
+func hasPathPrefix(path, prefix string) bool {
+	// Write(1, []byte("hasPathPrefix (path: "+path+", prefix: "+prefix+") -> prefix==\"/\": "+boolToString(prefix == "/")+", len(path): "+itoa.Itoa(len(path))+", len(prefix): "+itoa.Itoa(len(prefix))+"\n"))
+	if prefix == "" {
+		return false
+	}
+	if prefix == "/" {
+		return isAbs(path)
+	}
+	if len(path) == len(prefix) {
+		return true
+	}
+	// Ensure boundary match: "/base" matches "/base/..." but not "/baseX/..."
+	if prefix[len(prefix)-1] == '/' {
+		return true
+	}
+	return path[len(prefix)] == '/'
+}
+
 // preparePath returns the preopen file descriptor of the directory to perform
 // path resolution from, along with the pair of pointer and length for the
 // relative expression of path from the directory.
@@ -504,15 +554,20 @@ func preparePath(path string) (int32, *byte, size) {
 	path = joinPath(dir, path)
 
 	for _, p := range preopens {
+		// Write(1, []byte("p.name: "+p.name+"\n"))
+		// Write(1, []byte("path: "+path+"\n"))
+		// Write(1, []byte("dirName: "+dirName+"\n"))
+		// Write(1, []byte("hasPathPrefix: "+boolToString(hasPathPrefix(path, p.name))+"\n"))
 		if len(p.name) > len(dirName) && stringslite.HasPrefix(path, p.name) {
 			dirFd, dirName = p.fd, p.name
 		}
 	}
+	// Write(1, []byte("dirFd: "+itoa.Itoa(int(dirFd))+", dirName: "+dirName+"\n"))
 
 	path = path[len(dirName):]
-	for isAbs(path) {
-		path = path[1:]
-	}
+	// for isAbs(path) {
+	// 	path = path[1:]
+	// }
 	if len(path) == 0 {
 		path = "."
 	}
@@ -799,8 +854,25 @@ func Ftruncate(fd int, length int64) error {
 
 const ImplementsGetwd = true
 
+//go:wasmimport wasix_32v1 getcwd
+//go:noescape
+func getcwd(buf *byte, size uint32) Errno
+
 func Getwd() (string, error) {
-	return cwd, nil
+	buf := make([]byte, 4096)
+
+	errno := getcwd(&buf[0], uint32(len(buf)))
+	if errno != 0 {
+		return "", errnoErr(errno)
+	}
+	for i := range buf {
+		if buf[i] == 0 {
+			buf = buf[:i]
+			break
+		}
+	}
+	wd := removeNullByte(string(buf[:]))
+	return wd, nil
 }
 
 func Chdir(path string) error {
@@ -931,16 +1003,44 @@ func Seek(fd int, offset int64, whence int) (int64, error) {
 	return int64(newoffset), errnoErr(errno)
 }
 
+//go:wasmimport wasix_32v1 dup
+//go:noescape
+func dup(fd int32) Errno
+
 func Dup(fd int) (int, error) {
-	return 0, ENOSYS
+	errno := dup(int32(fd))
+	if errno != 0 {
+		return 0, errnoErr(errno)
+	}
+	return int(fd), nil
 }
+
+//go:wasmimport wasix_32v1 dup2
+//go:noescape
+func dup2(fd int32, newfd int32) Errno
 
 func Dup2(fd, newfd int) error {
-	return ENOSYS
+	errno := dup2(int32(fd), int32(newfd))
+	if errno != 0 {
+		return errnoErr(errno)
+	}
+	return nil
 }
 
+//go:wasmimport wasix_32v1 fd_pipe
+//go:noescape
+func pipe(read *int32, write *int32) Errno
+
 func Pipe(fd []int) error {
-	return ENOSYS
+	var read int32
+	var write int32
+	errno := pipe(&read, &write)
+	if errno != 0 {
+		return errnoErr(errno)
+	}
+	fd[0] = int(read)
+	fd[1] = int(write)
+	return nil
 }
 
 func RandomGet(b []byte) error {
