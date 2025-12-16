@@ -7,7 +7,6 @@
 package syscall
 
 import (
-	"internal/itoa"
 	"unsafe"
 )
 
@@ -19,6 +18,7 @@ const (
 	SHUT_RDWR = SHUT_RD | SHUT_WR
 )
 
+// Address families
 const (
 	AF_UNSPEC = 0
 	AF_INET   = 1
@@ -26,12 +26,17 @@ const (
 	AF_UNIX   = 3
 )
 
+// Socket types / flags (note: octal literals preserved)
 const (
-	// Socket types / flags (note: octal literals preserved)
 	SOCK_NONBLOCK = 0o200
 	SOCK_CLOEXEC  = 0o20000000
 )
 
+const (
+	MSG_DONTWAIT = 0x0040
+)
+
+// Protocol families
 const (
 	IPPROTO_IP   = 0
 	IPPROTO_TCP  = 6
@@ -39,6 +44,8 @@ const (
 	IPPROTO_IPV6 = 41
 	IPPROTO_UDP  = 0x11
 )
+
+// Miscellaneous constants
 const (
 	SOMAXCONN = 0x80
 )
@@ -115,31 +122,43 @@ const (
 
 	// Socket options
 	SO_DEBUG      = 1
-	SO_REUSEADDR  = 0x0004
-	SO_KEEPALIVE  = 0x0008
-	SO_DONTROUTE  = 0x0010
-	SO_BROADCAST  = 0x0020
-	SO_LINGER     = 0x0080
-	SO_OOBINLINE  = 0x0100
-	SO_REUSEPORT  = 0x0200
-	SO_SNDBUF     = 0x1001
-	SO_RCVBUF     = 0x1002
-	SO_SNDLOWAT   = 0x1003
-	SO_RCVLOWAT   = 0x1004
+	SO_KEEPALIVE  = 12
+	SO_BROADCAST  = 6
+	SO_LINGER     = 13
+	SO_OOBINLINE  = 14
+	SO_REUSEPORT  = 1
+	SO_SNDBUF     = 16
+	SO_RCVBUF     = 15
+	SO_SNDLOWAT   = 18
+	SO_RCVLOWAT   = 17
 	SO_ERROR      = 0x1007
 	SO_TYPE       = 0x1008
 	SO_ACCEPTCONN = 0x1009
-	SO_PROTOCOL   = 0x1028
+	SO_PROTOCOL   = 26
 	SO_DOMAIN     = 0x1029
 
-	SO_NO_CHECK    = 11
-	SO_PRIORITY    = 12
-	SO_BSDCOMPAT   = 14
-	SO_PASSCRED    = 17
-	SO_PEERCRED    = 18
-	SO_PEERSEC     = 30
-	SO_SNDBUFFORCE = 31
-	SO_RCVBUFFORCE = 33
+	SO_RCVTIMEO  = 19
+	SO_SNDTIMEO  = 20
+	SO_CONNTIMEO = 21
+	SO_ACCPTIMEO = 22
+
+	SO_REUSE_PORT        = 1
+	SO_REUSE_ADDR        = 2
+	SO_TTL               = 23
+	SO_MULTICAST_TTL_V4  = 24
+	SO_NODELAY           = 3
+	SO_DONTROUTE         = 4
+	SO_V6ONLY            = 5
+	SO_MULTICAST_LOOP_V4 = 7
+	SO_MULTICAST_LOOP_V6 = 8
+	SO_NO_CHECK          = 11
+	SO_PRIORITY          = 12
+	SO_BSDCOMPAT         = 14
+	SO_PASSCRED          = 17
+	SO_PEERCRED          = 18
+	SO_PEERSEC           = 30
+	SO_SNDBUFFORCE       = 31
+	SO_RCVBUFFORCE       = 33
 )
 
 const (
@@ -168,6 +187,14 @@ type SockaddrInet6 struct {
 
 type SockaddrUnix struct {
 	Name string
+}
+
+type AddressFamily uint8
+
+type RawSockaddrWithPortAny struct {
+	Tag    AddressFamily
+	_      byte // padding
+	Octets [18]byte
 }
 
 type sdflags = uint32
@@ -328,6 +355,125 @@ func sock_send_file(fd int32,
 //go:noescape
 func sock_shutdown(fd int32, flags sdflags) Errno
 
+func sockaddrInet4ToRawWithPort(rsa *RawSockaddrWithPortAny, sa *SockaddrInet4) int32 {
+	rsa.Tag = AF_INET
+
+	// Port (native endian, matches Rust from_ne_bytes)
+	rsa.Octets[0] = byte(sa.Port)
+	rsa.Octets[1] = byte(sa.Port >> 8)
+
+	// IPv4 address
+	copy(rsa.Octets[2:6], sa.Addr[:])
+
+	return int32(unsafe.Sizeof(*rsa))
+}
+
+func sockaddrInet6ToRawWithPort(rsa *RawSockaddrWithPortAny, sa *SockaddrInet6) int32 {
+	*rsa = RawSockaddrWithPortAny{} // zero everything
+
+	rsa.Tag = AF_INET6
+
+	// Port (native endian)
+	rsa.Octets[0] = byte(sa.Port)
+	rsa.Octets[1] = byte(sa.Port >> 8)
+
+	// IPv6 address
+	copy(rsa.Octets[2:18], sa.Addr[:])
+
+	return int32(unsafe.Sizeof(*rsa))
+}
+
+func rawWithPortToSockaddrInet4(rsa *RawSockaddrWithPortAny, sa *SockaddrInet4) error {
+	if rsa.Tag != AF_INET {
+		return EAFNOSUPPORT
+	}
+
+	sa.Port = int(uint16(rsa.Octets[0]) | uint16(rsa.Octets[1])<<8)
+	copy(sa.Addr[:], rsa.Octets[2:6])
+	return nil
+}
+
+func rawWithPortToSockaddrInet6(rsa *RawSockaddrWithPortAny, sa *SockaddrInet6) error {
+	if rsa.Tag != AF_INET6 {
+		return EAFNOSUPPORT
+	}
+
+	sa.Port = int(uint16(rsa.Octets[0]) | uint16(rsa.Octets[1])<<8)
+	copy(sa.Addr[:], rsa.Octets[2:18])
+	return nil
+}
+
+func sockaddrToRawWithPort(sa Sockaddr) (*RawSockaddrWithPortAny, error) {
+
+	switch sa := sa.(type) {
+	case *SockaddrInet4:
+		raw_sa := new(RawSockaddrWithPortAny) // zero everything
+		sockaddrInet4ToRawWithPort(raw_sa, sa)
+		return raw_sa, nil
+	case *SockaddrInet6:
+		raw_sa := new(RawSockaddrWithPortAny) // zero everything
+		sockaddrInet6ToRawWithPort(raw_sa, sa)
+		return raw_sa, nil
+	default:
+		return nil, EAFNOSUPPORT
+	}
+}
+
+func debugPrintSockaddrInet4(sa *SockaddrInet4) {
+	// Write(1, []byte("  SockaddrInet4: Port="+itoa.Itoa(sa.Port)+"\n"))
+	// Write(1, []byte("  SockaddrInet4: Address="+bytesToHexByteString(sa.Addr[:])+"\n"))
+}
+
+func debugPrintSockaddrInet6(sa *SockaddrInet6) {
+	// Write(1, []byte("  SockaddrInet6: Port="+itoa.Itoa(sa.Port)+"\n"))
+	// Write(1, []byte("  SockaddrInet6: Address="+bytesToHexByteString(sa.Addr[:])+"\n"))
+}
+func debugPrintSockaddr(sa Sockaddr) {
+	switch sa := sa.(type) {
+	case *SockaddrInet4:
+		debugPrintSockaddrInet4(sa)
+	case *SockaddrInet6:
+		debugPrintSockaddrInet6(sa)
+	}
+}
+
+func debugPrintRawSockaddrWithPortAny(rsa *RawSockaddrWithPortAny) {
+	// Write(1, []byte("  RawSockaddrWithPortAny: Tag="+itoa.Itoa(int(rsa.Tag))+"\n"))
+	// Write(1, []byte("  RawSockaddrWithPortAny: Octets="+bytesToHexByteString(rsa.Octets[:])+"\n"))
+}
+
+func rawWithPortToSockaddr(rsa *RawSockaddrWithPortAny) (Sockaddr, error) {
+	switch rsa.Tag {
+	case AF_INET:
+		var sa SockaddrInet4
+
+		// Port: native endian (matches Rust u16::from_ne_bytes)
+		sa.Port = int(uint16(rsa.Octets[0]) | uint16(rsa.Octets[1])<<8)
+		// IPv4 address: octs[2..6)
+		copy(sa.Addr[:], rsa.Octets[2:6])
+
+		return sa, nil
+
+	case AF_INET6:
+		var sa SockaddrInet6
+
+		// Port: native endian
+		sa.Port = int(uint16(rsa.Octets[0]) | uint16(rsa.Octets[1])<<8)
+
+		// IPv6 address: octs[2..18)
+		copy(sa.Addr[:], rsa.Octets[2:18])
+
+		// ZoneId is not encoded in __wasi_addr_port_t
+		sa.ZoneId = 0
+
+		return sa, nil
+
+	default:
+		// Write(1, []byte("rawWithPortToSockaddr: Unknown tag="+itoa.Itoa(int(rsa.Tag))+"\n"))
+		return nil, EAFNOSUPPORT
+	}
+}
+
 func Socket(domain, typ, proto int) (ret_fd int, err error) {
 	// Write(1, []byte("Socket.Socket\n"))
 	type_ := typ & 0xF // WASIX only supports 8-bit socket types (so we remove everything else)
@@ -339,7 +485,7 @@ func Socket(domain, typ, proto int) (ret_fd int, err error) {
 		}
 	}
 	// Get the 8-bit representation of the socket type
-	Write(1, []byte("Socket.Socket: domain="+itoa.Itoa(domain)+", typ="+itoa.Itoa(typ)+", typ8bits="+itoa.Itoa(int(type_))+", proto="+itoa.Itoa(proto)+"\n"))
+	// Write(1, []byte("Socket.Socket: domain="+itoa.Itoa(domain)+", typ="+itoa.Itoa(typ)+", typ8bits="+itoa.Itoa(int(type_))+", proto="+itoa.Itoa(proto)+"\n"))
 	// fmt.Sprintf("Socket.Socket: domain=%d, typ=%d, proto=%d\n", domain, typ, proto)
 
 	var fd int32
@@ -351,107 +497,388 @@ func Socket(domain, typ, proto int) (ret_fd int, err error) {
 }
 
 func setDefaultSockopts(s, family, sotype int, ipv6only bool) error {
-	Write(1, []byte("Socket.setDefaultSockopts\n"))
+	// Write(1, []byte("Socket.setDefaultSockopts\n"))
 	return ENOSYS
+}
+
+func patchPort(rsa *RawSockaddrWithPortAny) {
+	port_low, port_high := rsa.Octets[0], rsa.Octets[1]
+	rsa.Octets[0] = port_high
+	rsa.Octets[1] = port_low
 }
 
 func Getsockname(fd int) (Sockaddr, error) {
-	Write(1, []byte("Socket.Getsockname\n"))
-	return nil, ENOSYS
+	// Write(1, []byte("Socket.Getsockname\n"))
+	raw_sa := new(RawSockaddrWithPortAny) // zero everything
+	err := sock_addr_local(int32(fd), unsafe.Pointer(raw_sa))
+	if err != Errno(0) {
+		return nil, err
+	}
+	// HACK: WASIX returns the port in little-endian order for this call, so we need to patch it
+	patchPort(raw_sa)
+	debugPrintRawSockaddrWithPortAny(raw_sa)
+	sock_addr, err2 := rawWithPortToSockaddr(raw_sa)
+	if err2 != nil {
+		return nil, err2
+	}
+	debugPrintSockaddr(sock_addr)
+	return sock_addr, nil
 }
 
 func setDefaultMulticastSockopts(s int) error {
-	Write(1, []byte("Socket.setDefaultMulticastSockopts\n"))
-	return ENOSYS
+	// Write(1, []byte("Socket.setDefaultMulticastSockopts\n"))
+	return nil
 }
 
 func setDefaultListenerSockopts(s int) error {
-	Write(1, []byte("Socket.setDefaultListenerSockopts\n"))
-	return ENOSYS
+	// Write(1, []byte("Socket.setDefaultListenerSockopts\n"))
+	return nil
 }
 
 func Getpeername(fd int) (Sockaddr, error) {
-	Write(1, []byte("Socket.Getpeername\n"))
-	return nil, ENOSYS
+	// Write(1, []byte("Socket.Getpeername\n"))
+	raw_sa := new(RawSockaddrWithPortAny) // zero everything
+	err := sock_addr_peer(int32(fd), unsafe.Pointer(raw_sa))
+	if err != Errno(0) {
+		return nil, err
+	}
+	patchPort(raw_sa)
+	return rawWithPortToSockaddr(raw_sa)
+}
+
+func bytesToHexByteString(b []byte) string {
+	const hexdigits = "0123456789abcdef"
+
+	if len(b) == 0 {
+		return ""
+	}
+
+	out := make([]byte, 0, len(b)*3)
+	for i, v := range b {
+		if i > 0 {
+			out = append(out, ' ')
+		}
+		out = append(out, hexdigits[v>>4], hexdigits[v&0x0f])
+	}
+	return string(out)
 }
 
 func Bind(fd int, sa Sockaddr) error {
-	Write(1, []byte("Socket.Bind\n"))
-	sock_bind(int32(fd), unsafe.Pointer(&sa))
-	return ENOSYS
+	// Write(1, []byte("Socket.Bind\n"))
+	debugPrintSockaddr(sa)
+	raw_sa, err := sockaddrToRawWithPort(sa)
+	if err != nil {
+		return err
+	}
+	// size := unsafe.Sizeof(raw_sa)
+	// bytes := unsafe.Slice((*byte)(unsafe.Pointer(raw_sa)), size)
+	// Write(1, []byte("Sizeof(raw_sa): "+itoa.Itoa(int(size))+", Bytes: "+bytesToHexByteString(bytes)+"\n"))
+	debugPrintRawSockaddrWithPortAny(raw_sa)
+
+	sock_bind(int32(fd), unsafe.Pointer(raw_sa))
+
+	if err != Errno(0) {
+		return err
+	}
+	return nil
 }
 
 func StopIO(fd int) error {
-	Write(1, []byte("Socket.StopIO\n"))
+	// Write(1, []byte("Socket.StopIO\n"))
 	return ENOSYS
 }
 
 func Listen(fd int, backlog int) error {
-	Write(1, []byte("Socket.Listen\n"))
-	return ENOSYS
+	// Write(1, []byte("Socket.Listen\n"))
+	errno := sock_listen(int32(fd), int32(backlog))
+	if errno != Errno(0) {
+		return errnoErr(errno)
+	}
+	return nil
 }
 
 func Accept(fd int) (int, Sockaddr, error) {
-	Write(1, []byte("Socket.Accept\n"))
-	var newfd int32
-	random_addr := SockaddrInet4{
-		Port: 0,
-		Addr: [4]byte{0, 0, 0, 0},
+	// Write(1, []byte("Socket.Accept\n"))
+	var newfd int32 = -1
+	sock_addr := new(RawSockaddrWithPortAny)
+
+	errno := sock_accept_v2(int32(fd), FDFLAG_NONBLOCK, unsafe.Pointer(&newfd), unsafe.Pointer(sock_addr))
+	if errno != Errno(0) {
+		return 0, nil, errnoErr(errno)
 	}
-	addr_ptr := unsafe.Pointer(&random_addr)
-	errno := sock_accept_v2(int32(fd), 0, unsafe.Pointer(&newfd), addr_ptr)
-	return int(newfd), nil, errnoErr(errno)
+	// patchPort(sock_addr)
+	debugPrintRawSockaddrWithPortAny(sock_addr)
+	from_addr, err := rawWithPortToSockaddr(sock_addr)
+	debugPrintSockaddr(from_addr)
+	if err != nil {
+		return -1, nil, err
+	}
+	return int(newfd), from_addr, nil
 }
 
 func Connect(fd int, sa Sockaddr) error {
-	Write(1, []byte("Socket.Connect\n"))
-	return ENOSYS
+	// Write(1, []byte("Socket.Connect\n"))
+	sz, err := sockaddrToRawWithPort(sa)
+	if err != nil {
+		return err
+	}
+	err = sock_connect(int32(fd), unsafe.Pointer(sz))
+	if err != Errno(0) {
+		return err
+	}
+	return nil
 }
 
 func Recvfrom(fd int, p []byte, flags int) (n int, from Sockaddr, err error) {
-	Write(1, []byte("Socket.Recvfrom\n"))
-	return 0, nil, ENOSYS
+	// Write(1, []byte("Socket.Recvfrom\n"))
+	raw_sa := new(RawSockaddrWithPortAny) // zero everything
+	var n_int32 int32
+	var flags_int32 int32
+	err = sock_recv_from(int32(fd), unsafe.Pointer(&p[0]), int32(len(p)), int32(flags), unsafe.Pointer(&n_int32), unsafe.Pointer(&flags_int32), unsafe.Pointer(raw_sa))
+	if err != Errno(0) {
+		return 0, nil, err
+	}
+	patchPort(raw_sa)
+	from_addr, err := rawWithPortToSockaddr(raw_sa)
+	if err != nil {
+		return 0, nil, err
+	}
+	return int(n_int32), from_addr, nil
 }
 
 func Sendto(fd int, p []byte, flags int, to Sockaddr) error {
-	Write(1, []byte("Socket.Sendto\n"))
-	return ENOSYS
+	// Write(1, []byte("Socket.Sendto\n"))
+	raw_sa, err := sockaddrToRawWithPort(to)
+	if err != nil {
+		return err
+	}
+	var n_int32 int32
+	err = sock_send_to(int32(fd), unsafe.Pointer(&p[0]), int32(len(p)), int32(flags), unsafe.Pointer(&n_int32), unsafe.Pointer(raw_sa))
+	if err != Errno(0) {
+		return err
+	}
+	return nil
 }
 
 func Recvmsg(fd int, p, oob []byte, flags int) (n, oobn, recvflags int, from Sockaddr, err error) {
-	Write(1, []byte("Socket.Recvmsg\n"))
-	return 0, 0, 0, nil, ENOSYS
+	// Write(1, []byte("Socket.Recvmsg\n"))
+	raw_sa := new(RawSockaddrWithPortAny) // zero everything
+	var n_int32 int32
+	var recvflags_int32 int32
+	err = sock_recv_from(int32(fd), unsafe.Pointer(&p[0]), int32(len(p)), int32(flags), unsafe.Pointer(&n_int32), unsafe.Pointer(&recvflags_int32), unsafe.Pointer(raw_sa))
+	if err != Errno(0) {
+		return 0, 0, 0, nil, err
+	}
+	from_addr, err := rawWithPortToSockaddr(raw_sa)
+	if err != nil {
+		return 0, 0, 0, nil, err
+	}
+	return int(n_int32), int(recvflags_int32), int(recvflags_int32), from_addr, nil
 }
 
 func SendmsgN(fd int, p, oob []byte, to Sockaddr, flags int) (n int, err error) {
-	Write(1, []byte("Socket.SendmsgN\n"))
-	return 0, ENOSYS
+	// Write(1, []byte("Socket.SendmsgN\n"))
+
+	// Equivalent to: if (msg->msg_iov == NULL)
+	if len(p) == 0 {
+		return 0, EINVAL
+	}
+
+	// WASIX send flags
+	var siFlags int32 = 0
+	if (flags & MSG_DONTWAIT) != 0 {
+		siFlags |= 1 // __WASI_SIFLAGS_SEND_DONT_WAIT
+	}
+
+	var sent int32
+	var errno Errno
+
+	if to == nil {
+		// Connected socket → sock_send
+		errno = sock_send(
+			int32(fd),
+			unsafe.Pointer(&p[0]),
+			int32(len(p)),
+			siFlags,
+			unsafe.Pointer(&sent),
+		)
+	} else {
+		// Send-to variant
+		rawSA, err := sockaddrToRawWithPort(to)
+		if err != nil {
+			return 0, err
+		}
+
+		errno = sock_send_to(
+			int32(fd),
+			unsafe.Pointer(&p[0]),
+			int32(len(p)),
+			siFlags,
+			unsafe.Pointer(&sent),
+			unsafe.Pointer(rawSA),
+		)
+	}
+
+	if errno != Errno(0) {
+		return 0, errnoErr(errno)
+	}
+
+	return int(sent), nil
 }
 
 func GetsockoptInt(fd, level, opt int) (value int, err error) {
-	Write(1, []byte("Socket.GetsockoptInt\n"))
-	return 0, ENOSYS
+	// Write(1, []byte("Socket.GetsockoptInt\n"))
+
+	// Apply protocol → SOL_SOCKET normalization
+	level, opt = normalizeSockopt(level, opt)
+
+	if level != SOL_SOCKET {
+		return 0, ENOPROTOOPT
+	}
+
+	switch opt {
+
+	// ---------- Boolean options ----------
+	case SO_ACCEPTCONN,
+		SO_BROADCAST,
+		SO_DONTROUTE,
+		SO_NODELAY,
+		SO_OOBINLINE,
+		SO_V6ONLY,
+		SO_REUSEPORT,
+		SO_REUSE_ADDR,
+		SO_MULTICAST_LOOP_V4,
+		SO_MULTICAST_LOOP_V6,
+		SO_KEEPALIVE:
+
+		var on int32
+		errno := sock_get_opt_flag(
+			int32(fd),
+			int32(opt),
+			unsafe.Pointer(&on),
+		)
+		if errno != Errno(0) {
+			return 0, errnoErr(errno)
+		}
+
+		if on != 0 {
+			return 1, nil
+		}
+		return 0, nil
+
+	// ---------- Size-based options ----------
+	case SO_RCVBUF,
+		SO_SNDBUF,
+		SO_TTL,
+		SO_MULTICAST_TTL_V4:
+
+		var sz int64
+		errno := sock_get_opt_size(
+			int32(fd),
+			int32(opt),
+			unsafe.Pointer(&sz),
+		)
+		if errno != Errno(0) {
+			return 0, errnoErr(errno)
+		}
+
+		return int(sz), nil
+
+	// ---------- Always-zero options ----------
+	case SO_ERROR,
+		SO_PROTOCOL:
+		return 0, nil
+	}
+
+	return 0, ENOPROTOOPT
+}
+
+func normalizeSockopt(level, opt int) (int, int) {
+	// Protocol → socket-level remapping
+	if level == IPPROTO_IPV6 && opt == IPV6_V6ONLY {
+		return SOL_SOCKET, SO_V6ONLY
+	}
+	if level == IPPROTO_TCP && opt == TCP_NODELAY {
+		return SOL_SOCKET, SO_NODELAY
+	}
+	return level, opt
 }
 
 func SetsockoptInt(fd, level, opt int, value int) error {
-	Write(1, []byte("Socket.SetsockoptInt\n"))
-	return ENOSYS
+	// Write(1, []byte("Socket.SetsockoptInt\n"))
+	level, opt = normalizeSockopt(level, opt)
+
+	if level != SOL_SOCKET {
+		return ENOSYS
+	}
+
+	switch opt {
+
+	// ---------- Boolean options ----------
+	case SO_ACCEPTCONN,
+		SO_BROADCAST,
+		SO_DONTROUTE,
+		SO_NODELAY,
+		SO_OOBINLINE,
+		SO_V6ONLY,
+		SO_REUSEPORT,
+		SO_REUSE_ADDR,
+		SO_MULTICAST_LOOP_V4,
+		SO_MULTICAST_LOOP_V6,
+		SO_KEEPALIVE:
+
+		var on int32 = 0
+		if value > 0 {
+			on = 1
+		}
+
+		errno := sock_set_opt_flag(
+			int32(fd),
+			int32(opt),
+			on,
+		)
+		if errno != Errno(0) {
+			return errnoErr(errno)
+		}
+		return nil
+
+	// ---------- Size-based options ----------
+	case SO_RCVBUF,
+		SO_SNDBUF,
+		SO_TTL,
+		SO_MULTICAST_TTL_V4:
+
+		errno := sock_set_opt_size(
+			int32(fd),
+			int32(opt),
+			int64(value),
+		)
+		if errno != Errno(0) {
+			return errnoErr(errno)
+		}
+		return nil
+	}
+
+	return ENOPROTOOPT
 }
 
 func SetReadDeadline(fd int, t int64) error {
-	Write(1, []byte("Socket.SetReadDeadline\n"))
+	// Write(1, []byte("Socket.SetReadDeadline\n"))
 	return ENOSYS
 }
 
 func SetWriteDeadline(fd int, t int64) error {
-	Write(1, []byte("Socket.SetWriteDeadline\n"))
+	// Write(1, []byte("Socket.SetWriteDeadline\n"))
 	return ENOSYS
 }
 
 func Shutdown(fd int, how int) error {
+	// Write(1, []byte("Socket.Shutdown\n"))
 	errno := sock_shutdown(int32(fd), sdflags(how))
-	Write(1, []byte("Socket.Shutdown\n"))
-	return errnoErr(errno)
+	if errno != Errno(0) {
+		return errnoErr(errno)
+	}
+	return nil
 }
 
 type Linger struct {
@@ -459,12 +886,92 @@ type Linger struct {
 	Linger int32
 }
 
+type wasiOptionTimestamp struct {
+	Tag       wasiOptionTag
+	_         byte
+	Timestamp uint64
+}
+
 func SetsockoptLinger(fd, level, opt int, l *Linger) (err error) {
-	Write(1, []byte("Socket.SetsockoptLinger\n"))
-	return ENOSYS
+	// Write(1, []byte("Socket.SetsockoptLinger\n"))
+
+	level, opt = normalizeSockopt(level, opt)
+
+	if level != SOL_SOCKET || opt != SO_LINGER {
+		return ENOPROTOOPT
+	}
+	if l == nil {
+		return EINVAL
+	}
+	var tm wasiOptionTimestamp
+
+	if l.Onoff > 0 {
+		tm.Tag = wasiOptionSome
+		tm.Timestamp = uint64(l.Linger) * 1_000_000_000
+	} else {
+		tm.Tag = wasiOptionNone
+		tm.Timestamp = 0
+	}
+
+	errno := sock_set_opt_time(
+		int32(fd),
+		int32(opt),
+		unsafe.Pointer(&tm),
+	)
+	if errno != Errno(0) {
+		return errnoErr(errno)
+	}
+	return nil
+}
+
+func SetsockoptTimeval(fd, level, opt int, tv *Timeval) (err error) {
+	// Write(1, []byte("Socket.SetsockoptTimeval\n"))
+
+	level, opt = normalizeSockopt(level, opt)
+
+	if level != SOL_SOCKET {
+		return ENOPROTOOPT
+	}
+
+	switch opt {
+	case SO_RCVTIMEO,
+		SO_SNDTIMEO,
+		SO_CONNTIMEO,
+		SO_ACCPTIMEO:
+		// allowed
+	default:
+		return ENOPROTOOPT
+	}
+
+	if tv == nil {
+		return EINVAL
+	}
+
+	var tm wasiOptionTimestamp
+
+	if tv.Sec > 0 || tv.Usec > 0 {
+		tm.Tag = wasiOptionSome
+		tm.Timestamp =
+			uint64(tv.Sec)*1_000_000_000 +
+				uint64(tv.Usec)*1_000
+	} else {
+		tm.Tag = wasiOptionNone
+		tm.Timestamp = 0
+	}
+
+	errno := sock_set_opt_time(
+		int32(fd),
+		int32(opt),
+		unsafe.Pointer(&tm),
+	)
+	if errno != Errno(0) {
+		return errnoErr(errno)
+	}
+
+	return nil
 }
 
 func SetsockoptInet4Addr(fd, level, opt int, value [4]byte) (err error) {
-	Write(1, []byte("Socket.SetsockoptInet4Addr\n"))
-	return ENOSYS
+	// Write(1, []byte("Socket.SetsockoptInet4Addr\n"))
+	return SetsockoptInt(fd, level, opt, int(value[0])<<24|int(value[1])<<16|int(value[2])<<8|int(value[3]))
 }

@@ -454,15 +454,15 @@ type wasiJoinStatus struct {
 }
 
 // option<pid>
-type wasiOptionPidTag uint8
+type wasiOptionTag uint8
 
 const (
-	wasiOptionNone wasiOptionPidTag = 0
-	wasiOptionSome wasiOptionPidTag = 1
+	wasiOptionNone wasiOptionTag = 0
+	wasiOptionSome wasiOptionTag = 1
 )
 
 type wasiOptionPid struct {
-	Tag wasiOptionPidTag
+	Tag wasiOptionTag
 	_   byte
 	Pid int32
 }
