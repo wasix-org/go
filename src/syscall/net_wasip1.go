@@ -6,6 +6,8 @@
 
 package syscall
 
+import "unsafe"
+
 const (
 	SHUT_RD   = 0x1
 	SHUT_WR   = 0x2
@@ -14,11 +16,159 @@ const (
 
 type sdflags = uint32
 
-//go:wasmimport wasi_snapshot_preview1 sock_accept
+//go:wasmimport wasix_32v1 sock_recv
 //go:noescape
-func sock_accept(fd int32, flags fdflags, newfd *int32) Errno
+func sock_recv(fd int32,
+	ri_data unsafe.Pointer,
+	ri_data_len int32,
+	ri_flags int32,
+	ro_data_len unsafe.Pointer,
+	ro_flags unsafe.Pointer) Errno
 
-//go:wasmimport wasi_snapshot_preview1 sock_shutdown
+//go:wasmimport wasix_32v1 sock_send
+//go:noescape
+func sock_send(fd int32,
+	si_data unsafe.Pointer,
+	si_data_len int32,
+	si_flags int32,
+	ret_data_len unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_status
+//go:noescape
+func sock_status(fd int32, status unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_addr_local
+//go:noescape
+func sock_addr_local(fd int32,
+	ret_addr unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_addr_peer
+//go:noescape
+func sock_addr_peer(fd int32,
+	ro_addr unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_open
+//go:noescape
+func sock_open(family int32,
+	sotype int32,
+	proto int32,
+	ret_fd unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_pair
+//go:noescape
+func sock_pair(fd1 int32,
+	sotype int32,
+	proto int32,
+	ret_fd1 unsafe.Pointer,
+	ret_fd2 unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_set_opt_flag
+//go:noescape
+func sock_set_opt_flag(fd int32,
+	opt int32,
+	flag int32) Errno
+
+//go:wasmimport wasix_32v1 sock_get_opt_flag
+//go:noescape
+func sock_get_opt_flag(fd int32,
+	opt int32,
+	flag unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_set_opt_time
+//go:noescape
+func sock_set_opt_time(fd int32,
+	opt int32,
+	time unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_get_opt_time
+//go:noescape
+func sock_get_opt_time(fd int32,
+	opt int32,
+	ret_time unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_set_opt_size
+//go:noescape
+func sock_set_opt_size(fd int32,
+	opt int32,
+	size int64) Errno
+
+//go:wasmimport wasix_32v1 sock_get_opt_size
+//go:noescape
+func sock_get_opt_size(fd int32,
+	opt int32,
+	ret_size unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_join_multicast_v4
+//go:noescape
+func sock_join_multicast_v4(fd int32,
+	multiaddr unsafe.Pointer,
+	interface_ unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_leave_multicast_v4
+//go:noescape
+func sock_leave_multicast_v4(fd int32,
+	group unsafe.Pointer,
+	interface_ unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_join_multicast_v6
+//go:noescape
+func sock_join_multicast_v6(fd int32,
+	multiaddr unsafe.Pointer,
+	interface_ unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_leave_multicast_v6
+//go:noescape
+func sock_leave_multicast_v6(fd int32,
+	multiaddr unsafe.Pointer,
+	interface_ unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_bind
+//go:noescape
+func sock_bind(fd int32,
+	addr unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_listen
+//go:noescape
+func sock_listen(fd int32,
+	backlog int32) Errno
+
+//go:wasmimport wasix_32v1 sock_accept_v2
+//go:noescape
+func sock_accept_v2(fd int32, flags fdflags, newfd unsafe.Pointer, ret_addr unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_connect
+//go:noescape
+func sock_connect(fd int32,
+	addr unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_recv_from
+//go:noescape
+func sock_recv_from(fd int32,
+	ri_data unsafe.Pointer,
+	ri_data_len int32,
+	ri_flags int32,
+	ro_data_len unsafe.Pointer,
+	ro_flags unsafe.Pointer,
+	ro_addr unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_send_to
+//go:noescape
+func sock_send_to(fd int32,
+	si_data unsafe.Pointer,
+	si_data_len int32,
+	si_flags int32,
+	ret_data_len unsafe.Pointer,
+	to unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_send_file
+//go:noescape
+func sock_send_file(fd int32,
+	in_fd int32,
+	offset int64,
+	count int64,
+	ret_sent unsafe.Pointer) Errno
+
+//go:wasmimport wasix_32v1 sock_shutdown
 //go:noescape
 func sock_shutdown(fd int32, flags sdflags) Errno
 
@@ -77,7 +227,12 @@ func Listen(fd int, backlog int) error {
 
 func Accept(fd int) (int, Sockaddr, error) {
 	var newfd int32
-	errno := sock_accept(int32(fd), 0, &newfd)
+	random_addr := SockaddrInet4{
+		Port: 0,
+		Addr: [4]byte{0, 0, 0, 0},
+	}
+	addr_ptr := unsafe.Pointer(&random_addr)
+	errno := sock_accept_v2(int32(fd), 0, unsafe.Pointer(&newfd), addr_ptr)
 	return int(newfd), nil, errnoErr(errno)
 }
 
@@ -134,7 +289,3 @@ func SetsockoptLinger(fd, level, opt int, l *Linger) (err error) {
 func SetsockoptInet4Addr(fd, level, opt int, value [4]byte) (err error) {
 	return ENOSYS
 }
-
-// func SetsockoptLinger(fd, level, opt int, l *Linger) (err error) {
-// 	return ENOSYS
-// }
