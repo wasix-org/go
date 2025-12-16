@@ -190,6 +190,9 @@ func ForkExec(argv0 string, argv []string, attr *ProcAttr) (pid int, err error) 
 	// Write(1, []byte(envvJoined))
 	// Write(1, []byte(path))
 	// Write(1, []byte("Files num "+itoa.Itoa(len(attr.Files))))
+	// for i, file := range attr.Files {
+	// 	Write(1, []byte("File: "+itoa.Itoa(int(file))+" at index "+itoa.Itoa(i)))
+	// }
 
 	runtime_BeforeExec()
 	err = proc_spawn2(

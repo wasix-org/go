@@ -354,6 +354,16 @@ func Sysctl(key string) (string, error) {
 	if key == "kern.hostname" {
 		return "wasip1", nil
 	}
+	if key == "kern.osrelease" {
+		return "1.0.0", nil
+	}
+	if key == "kern.version" {
+		return "1.0.0", nil
+	}
+	if key == "hw.machine" {
+		return "WebAssembly", nil
+	}
+
 	return "", ENOSYS
 }
 
