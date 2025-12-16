@@ -26,6 +26,43 @@ func Socket(proto, sotype, unused int) (fd int, err error) {
 	return 0, ENOSYS
 }
 
+func setDefaultSockopts(s, family, sotype int, ipv6only bool) error {
+	return ENOSYS
+}
+
+func Getsockname(fd int) (Sockaddr, error) {
+	return nil, ENOSYS
+}
+
+func setDefaultMulticastSockopts(s int) error {
+	return ENOSYS
+}
+
+func setDefaultListenerSockopts(s int) error {
+	return ENOSYS
+}
+
+const SO_RCVBUF = 15   // Check
+const SO_SNDBUF = 16   // Check
+const SO_KEEPALIVE = 9 // Check
+const SO_LINGER = 128  // Check
+
+const TCP_KEEPINTVL = 0x101 // Check
+const TCP_KEEPCNT = 0x102   // Check
+const TCP_KEEPALIVE = 0x103 // Check
+const TCP_KEEPIDLE = 0x104  // Check
+
+const TCP_NODELAY = 1 // Check
+
+const SOCK_NONBLOCK = 0x00004000
+const SOCK_CLOEXEC = 0x00002000
+
+const SOL_SOCKET = 0x7fffffff
+
+func Getpeername(fd int) (Sockaddr, error) {
+	return nil, ENOSYS
+}
+
 func Bind(fd int, sa Sockaddr) error {
 	return ENOSYS
 }
@@ -84,3 +121,20 @@ func Shutdown(fd int, how int) error {
 	errno := sock_shutdown(int32(fd), sdflags(how))
 	return errnoErr(errno)
 }
+
+type Linger struct {
+	Onoff  int32
+	Linger int32
+}
+
+func SetsockoptLinger(fd, level, opt int, l *Linger) (err error) {
+	return ENOSYS
+}
+
+func SetsockoptInet4Addr(fd, level, opt int, value [4]byte) (err error) {
+	return ENOSYS
+}
+
+// func SetsockoptLinger(fd, level, opt int, l *Linger) (err error) {
+// 	return ENOSYS
+// }
