@@ -1,0 +1,189 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - '*'
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+            artifact_name: linux-x86_64
+            archive_format: tar.gz
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+            artifact_name: linux-aarch64
+            archive_format: tar.gz
+          - os: macos-14
+            goos: darwin
+            goarch: amd64
+            artifact_name: darwin-x86_64
+            archive_format: tar.gz
+          - os: macos-14
+            goos: darwin
+            goarch: arm64
+            artifact_name: darwin-aarch64
+            archive_format: tar.gz
+          - os: windows-latest
+            goos: windows
+            goarch: amd64
+            artifact_name: win
+            archive_format: zip
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up environment
+        shell: bash
+        run: |
+          export GOOS=${{ matrix.goos }}
+          export GOARCH=${{ matrix.goarch }}
+          echo "GOOS=${{ matrix.goos }}" >> $GITHUB_ENV
+          echo "GOARCH=${{ matrix.goarch }}" >> $GITHUB_ENV
+
+      - name: Build Go
+        shell: bash
+        if: matrix.os != 'windows-latest'
+        working-directory: src
+        run: |
+          export GOOS=${{ matrix.goos }}
+          export GOARCH=${{ matrix.goarch }}
+          bash ./make.bash
+
+      - name: Build Go (Windows)
+        shell: cmd
+        if: matrix.os == 'windows-latest'
+        working-directory: src
+        run: |
+          set GOOS=${{ matrix.goos }}
+          set GOARCH=${{ matrix.goarch }}
+          call make.bat
+
+      - name: Get version information
+        id: version
+        shell: bash
+        run: |
+          export GOOS=${{ matrix.goos }}
+          export GOARCH=${{ matrix.goarch }}
+          # Try ./bin/go first, then ./bin/go.exe (for Windows)
+          if [ -f ./bin/go ]; then
+            GO_CMD=./bin/go
+          elif [ -f ./bin/go.exe ]; then
+            GO_CMD=./bin/go.exe
+          else
+            echo "Error: go binary not found"
+            exit 1
+          fi
+          VERSION_INFO=$($GO_CMD env -json GOVERSION GOOS GOARCH)
+          GOVERSION=$(echo "$VERSION_INFO" | jq -r '.GOVERSION')
+          VERSION=$(echo "$GOVERSION" | sed 's/^go//')
+          echo "$VERSION" > version.txt
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Create archive
+        id: archive
+        shell: bash
+        if: matrix.archive_format != 'zip'
+        run: |
+          VERSION=$(cat version.txt)
+          ARTIFACT_NAME="go-${VERSION}-${{ matrix.artifact_name }}"
+          ARCHIVE_NAME="${ARTIFACT_NAME}.tar.gz"
+          
+          tar --exclude='.git' \
+              --exclude='.gitignore' \
+              --exclude='.github' \
+              --exclude='*.tar.gz' \
+              --exclude='*.zip' \
+              -czf "${ARCHIVE_NAME}" .
+          
+          echo "archive_name=${ARCHIVE_NAME}" >> $GITHUB_OUTPUT
+          echo "artifact_name=${{ matrix.artifact_name }}" >> $GITHUB_OUTPUT
+
+      - name: Create archive (Windows)
+        id: archive
+        shell: bash
+        if: matrix.archive_format == 'zip'
+        run: |
+          VERSION=$(cat version.txt)
+          ARTIFACT_NAME="go-${VERSION}-${{ matrix.artifact_name }}"
+          ARCHIVE_NAME="${ARTIFACT_NAME}.zip"
+          
+          # Use zip command (available via Git Bash on Windows)
+          # Exclude patterns: .git, .gitignore, .github, and existing archives
+          zip -r "${ARCHIVE_NAME}" . \
+            -x ".git/*" \
+            -x ".gitignore" \
+            -x ".github/*" \
+            -x "*.zip" \
+            -x "*.tar.gz"
+          
+          echo "archive_name=${ARCHIVE_NAME}" >> $GITHUB_OUTPUT
+          echo "artifact_name=${{ matrix.artifact_name }}" >> $GITHUB_OUTPUT
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.version.outputs.version }}-${{ matrix.artifact_name }}
+          path: ${{ steps.archive.outputs.archive_name }}
+          retention-days: 1
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Get tag name
+        id: tag
+        run: |
+          TAG_NAME=${GITHUB_REF#refs/tags/}
+          echo "tag=$TAG_NAME" >> $GITHUB_OUTPUT
+          echo "Tag: $TAG_NAME"
+
+      - name: Prepare release artifacts
+        id: prepare
+        run: |
+          # Artifacts are already named correctly: go-{version}-{platform}.{ext}
+          # Just collect them into a single directory
+          mkdir -p release-artifacts
+          
+          # Find and copy all archive files
+          find artifacts -name "go-*.tar.gz" -o -name "go-*.zip" | while read file; do
+            cp "$file" release-artifacts/
+          done
+          
+          echo "Artifacts prepared:"
+          ls -lh release-artifacts/
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Release ${{ steps.tag.outputs.tag }}
+          files: |
+            release-artifacts/go-*.tar.gz
+            release-artifacts/go-*.zip
+          draft: false
+          prerelease: false
+
