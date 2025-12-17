@@ -97,41 +97,87 @@ jobs:
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Version: $VERSION"
 
-      - name: Create archive
-        id: archive
+      - name: Create archive (Unix)
+        id: archive_unix
         shell: bash
+        if: matrix.archive_format != 'zip'
         run: |
+          # Small delay to ensure any file operations from previous steps are complete
+          sleep 1
+          
           VERSION=$(cat version.txt)
           ARTIFACT_NAME="go-${VERSION}-${{ matrix.artifact_name }}"
+          ARCHIVE_NAME="${ARTIFACT_NAME}.tar.gz"
           
-          if [ "${{ matrix.archive_format }}" = "zip" ]; then
-            # For Windows, use zip
-            ARCHIVE_NAME="${ARTIFACT_NAME}.zip"
-            zip -r "${ARCHIVE_NAME}" . \
-              -x ".git/*" \
-              -x ".gitignore" \
-              -x ".github/*" \
-              -x "*.zip" \
-              -x "*.tar.gz"
-          else
-            # For Unix-like systems, use tar.gz
-            ARCHIVE_NAME="${ARTIFACT_NAME}.tar.gz"
-            tar --exclude='.git' \
-                --exclude='.gitignore' \
-                --exclude='.github' \
-                --exclude='*.tar.gz' \
-                --exclude='*.zip' \
-                -czf "${ARCHIVE_NAME}" .
-          fi
+          # Use --warning=no-file-changed to suppress warnings about files changing during archive
+          tar --warning=no-file-changed \
+              --exclude='.git' \
+              --exclude='.gitignore' \
+              --exclude='.github' \
+              --exclude='*.tar.gz' \
+              --exclude='*.zip' \
+              --exclude='version.txt' \
+              -czf "${ARCHIVE_NAME}" .
           
           echo "archive_name=${ARCHIVE_NAME}" >> $GITHUB_OUTPUT
           echo "artifact_name=${{ matrix.artifact_name }}" >> $GITHUB_OUTPUT
+
+      - name: Create archive (Windows)
+        id: archive_windows
+        shell: pwsh
+        if: matrix.archive_format == 'zip'
+        run: |
+          # Small delay to ensure any file operations from previous steps are complete
+          Start-Sleep -Seconds 1
+          
+          $VERSION = Get-Content version.txt
+          $ARTIFACT_NAME = "go-${VERSION}-${{ matrix.artifact_name }}"
+          $ARCHIVE_NAME = "${ARTIFACT_NAME}.zip"
+          
+          # Use .NET ZipFile class for proper zip creation
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          
+          $rootPath = (Get-Location).Path
+          $zip = [System.IO.Compression.ZipFile]::Open($ARCHIVE_NAME, [System.IO.Compression.ZipArchiveMode]::Create)
+          
+          try {
+            Get-ChildItem -Path . -Recurse -Force | ForEach-Object {
+              $relativePath = $_.FullName.Replace($rootPath, '').TrimStart('\', '/')
+              
+              # Skip exclusions
+              if ($relativePath -notlike '.git\*' -and
+                  $relativePath -ne '.gitignore' -and
+                  $relativePath -notlike '.github\*' -and
+                  $relativePath -notlike '*.zip' -and
+                  $relativePath -notlike '*.tar.gz' -and
+                  $relativePath -ne 'version.txt' -and
+                  -not $_.PSIsContainer) {
+                $entryName = $relativePath.Replace('\', '/')
+                [System.IO.Compression.ZipFileExtensions]::CreateEntryFromFile($zip, $_.FullName, $entryName) | Out-Null
+              }
+            }
+          } finally {
+            $zip.Dispose()
+          }
+          
+          Write-Host "archive_name=${ARCHIVE_NAME}" >> $env:GITHUB_OUTPUT
+          Write-Host "artifact_name=${{ matrix.artifact_name }}" >> $env:GITHUB_OUTPUT
+
+      - name: Determine archive path
+        id: archive_path
+        shell: bash
+        run: |
+          if [ "${{ matrix.archive_format }}" = "zip" ]; then
+            echo "archive_name=${{ steps.archive_windows.outputs.archive_name }}" >> $GITHUB_OUTPUT
+          else
+            echo "archive_name=${{ steps.archive_unix.outputs.archive_name }}" >> $GITHUB_OUTPUT
+          fi
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.version.outputs.version }}-${{ matrix.artifact_name }}
-          path: ${{ steps.archive.outputs.archive_name }}
+          path: ${{ steps.archive_path.outputs.archive_name }}
           retention-days: 1
 
   release:
