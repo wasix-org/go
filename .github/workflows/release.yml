@@ -95,39 +95,29 @@ jobs:
       - name: Create archive
         id: archive
         shell: bash
-        if: matrix.archive_format != 'zip'
         run: |
           VERSION=$(cat version.txt)
           ARTIFACT_NAME="go-${VERSION}-${{ matrix.artifact_name }}"
-          ARCHIVE_NAME="${ARTIFACT_NAME}.tar.gz"
           
-          tar --exclude='.git' \
-              --exclude='.gitignore' \
-              --exclude='.github' \
-              --exclude='*.tar.gz' \
-              --exclude='*.zip' \
-              -czf "${ARCHIVE_NAME}" .
-          
-          echo "archive_name=${ARCHIVE_NAME}" >> $GITHUB_OUTPUT
-          echo "artifact_name=${{ matrix.artifact_name }}" >> $GITHUB_OUTPUT
-
-      - name: Create archive (Windows)
-        id: archive
-        shell: bash
-        if: matrix.archive_format == 'zip'
-        run: |
-          VERSION=$(cat version.txt)
-          ARTIFACT_NAME="go-${VERSION}-${{ matrix.artifact_name }}"
-          ARCHIVE_NAME="${ARTIFACT_NAME}.zip"
-          
-          # Use zip command (available via Git Bash on Windows)
-          # Exclude patterns: .git, .gitignore, .github, and existing archives
-          zip -r "${ARCHIVE_NAME}" . \
-            -x ".git/*" \
-            -x ".gitignore" \
-            -x ".github/*" \
-            -x "*.zip" \
-            -x "*.tar.gz"
+          if [ "${{ matrix.archive_format }}" = "zip" ]; then
+            # For Windows, use zip
+            ARCHIVE_NAME="${ARTIFACT_NAME}.zip"
+            zip -r "${ARCHIVE_NAME}" . \
+              -x ".git/*" \
+              -x ".gitignore" \
+              -x ".github/*" \
+              -x "*.zip" \
+              -x "*.tar.gz"
+          else
+            # For Unix-like systems, use tar.gz
+            ARCHIVE_NAME="${ARTIFACT_NAME}.tar.gz"
+            tar --exclude='.git' \
+                --exclude='.gitignore' \
+                --exclude='.github' \
+                --exclude='*.tar.gz' \
+                --exclude='*.zip' \
+                -czf "${ARCHIVE_NAME}" .
+          fi
           
           echo "archive_name=${ARCHIVE_NAME}" >> $GITHUB_OUTPUT
           echo "artifact_name=${{ matrix.artifact_name }}" >> $GITHUB_OUTPUT
