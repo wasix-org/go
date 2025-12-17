@@ -109,9 +109,9 @@ jobs:
           ARTIFACT_NAME="go-${VERSION}-${{ matrix.artifact_name }}"
           ARCHIVE_NAME="${ARTIFACT_NAME}.tar.gz"
           
-          # Use --warning=no-file-changed to suppress warnings about files changing during archive
-          tar --warning=no-file-changed \
-              --exclude='.git' \
+          # Create tar archive
+          # Note: "file changed as we read it" warnings are harmless - tar still creates a valid archive
+          tar --exclude='.git' \
               --exclude='.gitignore' \
               --exclude='.github' \
               --exclude='*.tar.gz' \
