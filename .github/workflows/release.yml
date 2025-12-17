@@ -110,14 +110,21 @@ jobs:
           ARCHIVE_NAME="${ARTIFACT_NAME}.tar.gz"
           
           # Create tar archive
-          # Note: "file changed as we read it" warnings are harmless - tar still creates a valid archive
+          # Note: tar may exit with code 1 due to "file changed as we read it" warnings,
+          # but the archive is still created successfully. We ignore the exit code and verify the file exists.
           tar --exclude='.git' \
               --exclude='.gitignore' \
               --exclude='.github' \
               --exclude='*.tar.gz' \
               --exclude='*.zip' \
               --exclude='version.txt' \
-              -czf "${ARCHIVE_NAME}" .
+              -czf "${ARCHIVE_NAME}" . 2>&1 | grep -v "file changed as we read it" || true
+          
+          # Verify archive was created successfully
+          if [ ! -f "${ARCHIVE_NAME}" ]; then
+            echo "Error: Archive was not created"
+            exit 1
+          fi
           
           echo "archive_name=${ARCHIVE_NAME}" >> $GITHUB_OUTPUT
           echo "artifact_name=${{ matrix.artifact_name }}" >> $GITHUB_OUTPUT
@@ -160,18 +167,39 @@ jobs:
             $zip.Dispose()
           }
           
-          Write-Host "archive_name=${ARCHIVE_NAME}" >> $env:GITHUB_OUTPUT
-          Write-Host "artifact_name=${{ matrix.artifact_name }}" >> $env:GITHUB_OUTPUT
+          # Verify archive was created
+          if (-not (Test-Path $ARCHIVE_NAME)) {
+            Write-Error "Error: Archive was not created"
+            exit 1
+          }
+          
+          # Write outputs to GITHUB_OUTPUT
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "archive_name=$ARCHIVE_NAME"
+          Add-Content -Path $env:GITHUB_OUTPUT -Value "artifact_name=${{ matrix.artifact_name }}"
+          
+          Write-Host "Created archive: $ARCHIVE_NAME"
+          Write-Host "Archive name output: archive_name=$ARCHIVE_NAME"
 
       - name: Determine archive path
         id: archive_path
         shell: bash
         run: |
           if [ "${{ matrix.archive_format }}" = "zip" ]; then
-            echo "archive_name=${{ steps.archive_windows.outputs.archive_name }}" >> $GITHUB_OUTPUT
+            ARCHIVE_NAME="${{ steps.archive_windows.outputs.archive_name }}"
+            if [ -z "$ARCHIVE_NAME" ]; then
+              echo "Error: Windows archive name is empty"
+              exit 1
+            fi
+            echo "archive_name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
           else
-            echo "archive_name=${{ steps.archive_unix.outputs.archive_name }}" >> $GITHUB_OUTPUT
+            ARCHIVE_NAME="${{ steps.archive_unix.outputs.archive_name }}"
+            if [ -z "$ARCHIVE_NAME" ]; then
+              echo "Error: Unix archive name is empty"
+              exit 1
+            fi
+            echo "archive_name=$ARCHIVE_NAME" >> $GITHUB_OUTPUT
           fi
+          echo "Using archive: $ARCHIVE_NAME"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
