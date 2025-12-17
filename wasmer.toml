@@ -1,0 +1,59 @@
+[package]   
+name = "golang/go"
+version = "1.25.5"
+description = "Go compiled to wasip1"
+private = false
+entrypoint = "go"
+
+[fs] 
+"/go/src"="src"
+"/go/pkg/tool/wasip1_wasm"="pkg/tool/wasip1_wasm"
+"/go/pkg/include"="pkg/include"
+
+[[module]]
+name = "go"   
+source = "bin/wasip1_wasm/go" 
+abi = "wasi" 
+
+[module.interfaces] 
+wasi = "0.1.0-unstable"
+
+[[module]]
+name = "compile"   
+source = "pkg/tool/wasip1_wasm/compile" 
+abi = "wasi" 
+
+[module.interfaces] 
+wasi = "0.1.0-unstable"
+
+[[module]]
+name = "gofmt"   
+source = "bin/wasip1_wasm/gofmt" 
+abi = "wasi" 
+
+[module.interfaces] 
+wasi = "0.1.0-unstable"
+
+[[command]]    
+name = "go"   
+module = "go" 
+runner = "wasi"   
+
+[command.annotations.wasi]    
+env = ["GOPATH=/home", "GOROOT=/go", "GOCACHE=/tmp/.gocache", "GOWORK=off", "CGO_ENABLED=0", "GOOS=wasip1", "GOARCH=wasm"]
+
+[[command]]    
+name = "compile"   
+module = "compile" 
+runner = "wasi"   
+
+[command.annotations.wasi]    
+env = ["GOPATH=/home", "GOROOT=/go", "GOCACHE=/tmp/.gocache", "GOWORK=off", "CGO_ENABLED=0", "GOOS=wasip1", "GOARCH=wasm"]
+
+[[command]]    
+name = "gofmt"   
+module = "gofmt" 
+runner = "wasi"   
+
+[command.annotations.wasi]    
+env = ["GOPATH=/home", "GOROOT=/go","GOCACHE=/tmp/.gocache", "GOTMPDIR=/tmp", "GOWORK=off", "CGO_ENABLED=0"]
